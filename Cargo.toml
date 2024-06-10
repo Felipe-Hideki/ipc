@@ -10,3 +10,8 @@ crate-type = ["rlib"]
 
 [dependencies]
 logs = "0.7.1"
+tokio = { version = "1.38.0", features = ["full"], optional = true }
+
+[features]
+default = []
+async = ["tokio"]
