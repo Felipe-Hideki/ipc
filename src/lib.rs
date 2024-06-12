@@ -37,14 +37,16 @@
 //! ```
 pub mod server;
 
+use std::fs::create_dir_all;
 use std::os::unix::net::UnixStream;
 use std::io::{ Read, Write };
+use std::path::Path;
 use std::time::Duration;
 
 /// Default path for the sockets
 /// 
 /// Used when the user doesn't provide a full path for the socket.
-pub const SOCKET_PATH: &str = "/var/lib/tag/sockets";
+pub const SOCKET_PATH: &str = "/tmp";
 
 /// Response option when sending data.
 /// 
@@ -94,14 +96,21 @@ impl Client
     pub fn new(path: impl Into<String>, read_timeout: Option<Duration>, write_timeout: Option<Duration>) -> Result<Self, std::io::Error>
     {
         let path: String = path.into();
-        let connection = if path.as_bytes()[0] != b'/'
+        
+        let path = if path.as_bytes()[0] != b'/'
         {
-            UnixStream::connect(format!("{}/{}", SOCKET_PATH, path))?
+            format!("{}/{}", SOCKET_PATH, path)
         }
         else 
         {
-            UnixStream::connect(path)?
+            path
         };
+
+        if !Path::new(&path).exists()
+        {
+            create_dir_all(SOCKET_PATH)?;
+        }
+        let connection = UnixStream::connect(path)?;
         
         connection.set_read_timeout(read_timeout)?;
         connection.set_write_timeout(write_timeout)?;
