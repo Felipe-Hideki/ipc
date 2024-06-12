@@ -44,7 +44,7 @@ use std::time::Duration;
 /// Default path for the sockets
 /// 
 /// Used when the user doesn't provide a full path for the socket.
-pub const SOCKET_PATH: &str = "/var/lib/tag_connectivity/sockets";
+pub const SOCKET_PATH: &str = "/var/lib/tag/sockets";
 
 /// Response option when sending data.
 /// 
