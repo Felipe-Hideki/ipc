@@ -49,6 +49,10 @@ impl AsyncListener
         })
     }
 
+    pub fn get_raw_path(&self) -> String
+    {
+        self.ipc_server.raw_path.to_string()
+    }
     /// Waits for a connection to be established
     /// 
     /// Returns a Connection object if a connection is established, otherwise None

@@ -25,6 +25,7 @@ pub struct StreamData
 #[derive(Debug)]
 pub struct RawListener
 {
+    pub raw_path: String,
     pub socket_name: String,
     listener: UnixListener
 }
@@ -53,6 +54,7 @@ impl RawListener
         }
         Ok(Self
         {
+            raw_path: server_path.to_string(),
             socket_name: socket_name.to_string(),
             listener: UnixListener::bind(server_path)?
         })
