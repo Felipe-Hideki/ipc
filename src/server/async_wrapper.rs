@@ -20,6 +20,11 @@ impl Connection
     {
         let mut buf = [0u8; 1024];
         let bytes_read = self.stream.read(&mut buf).await?;
+        if bytes_read == 0 // as per the tokio docs, a return value of 0 might indicate that the stream has been closed
+        {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "No data read"));
+        }
+
         let message = String::from_utf8_lossy(&buf[..bytes_read]);
         Ok(T::from(message.to_string()))
         // {
