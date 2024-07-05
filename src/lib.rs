@@ -35,19 +35,35 @@
 //!     Ok(())
 //! }
 //! ```
-pub mod server;
+#[cfg(feature="async")]
+pub mod async_wrapper;
 
 use std::fs::create_dir_all;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixStream, UnixListener};
 use std::io::{ Read, Write };
 use std::path::Path;
 use std::time::Duration;
+use std::fs::remove_file;
+
+use logs::{info, error};
 
 /// Default path for the sockets
 /// 
 /// Used when the user doesn't provide a full path for the socket.
 pub const SOCKET_PATH: &str = "/tmp";
 
+fn get_full_path(path: impl Into<String>) -> String
+{
+    let path: String = path.into();
+    if path.as_bytes()[0] != b'/'
+    {
+        format!("{}/{}", SOCKET_PATH, path)
+    }
+    else 
+    {
+        path
+    }
+}
 /// Response option when sending data.
 /// 
 /// Used to specify if the client should wait for a response from the server or not when using the 
@@ -76,115 +92,164 @@ pub enum ResponseOption<'a>
     DontWaitForResponse
 }
 
-/// Client side communication handler, provides a simple interface to send data to a server.
-/// 
-/// It provides two methods to send data: 
-/// 
-/// [`send`](Client::send) -> Need to open the connection beforehand and can be used to send multiple messages in a 
-/// short period of time without the overhead of creating a new connection every call.
-/// 
-/// [`send_one_shot`](Client::send_one_shot) -> Create and delete the connection every time it is called, it is supposed
-/// to be used when the message doesn't need to be sent multiple times in a short period of time.
-#[derive(Debug)]
-pub struct Client
+pub struct Connection
 {
-    connection: UnixStream
+    stream: UnixStream
 }
 
-impl Client
+impl Connection
 {
-    pub fn new(path: impl Into<String>, read_timeout: Option<Duration>, write_timeout: Option<Duration>) -> Result<Self, std::io::Error>
+    pub fn new(stream: UnixStream) -> Self
     {
-        let path: String = path.into();
-        
-        let path = if path.as_bytes()[0] != b'/'
-        {
-            format!("{}/{}", SOCKET_PATH, path)
-        }
-        else 
-        {
-            path
-        };
+        Self { stream }
+    }
 
-        if !Path::new(&path).exists()
+    pub fn read_raw(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error>
+    {
+        self.stream.read(buf)
+    }
+
+    pub fn read<T>(&mut self) -> Result<T, std::io::Error>
+    where T: From<String>
+    {
+        let mut buf = [0u8; 1024];
+        let bytes_read = self.stream.read(&mut buf)?;
+        if bytes_read == 0
         {
-            create_dir_all(SOCKET_PATH)?;
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "No data read"));
         }
-        let connection = UnixStream::connect(path)?;
+
+        let message = String::from_utf8_lossy(&buf[..bytes_read]);
+        Ok(T::from(message.to_string()))
+    }
+    
+    pub fn send(&mut self, response: impl Into<String>) -> Result<(), std::io::Error>
+    {
+        let response: String = response.into();
+        self.stream.write_all(&Vec::from(response))
+    }
+}
+
+pub fn new_client(path: impl Into<String>) -> Result<UnixStream, std::io::Error>
+{
+    UnixStream::connect(get_full_path(path))
+}
+
+/// Sends data to the server and waits for a response if needed. 
+/// 
+/// It cant use the connection created when the client is instantiated, it is supposed to be used when
+/// the message doesn't need to be sent multiple times in a short period of time.
+/// 
+/// If the message needs to be sent multiple times in a short period of time, it is recommended to use
+/// the [`send`](Client::send) method instead.
+/// 
+/// # Example
+/// ```
+/// use std::{io, io::Write};
+/// 
+/// use ipc::{Client, ResponseOption};
+/// 
+/// fn send_msg(sock: String, msg: String) -> Result<(), io::Error>
+/// {
+///     Client::send_one_shot(msg.as_bytes(), sock, ResponseOption::DontWaitForResponse)?
+/// }
+/// ```
+pub fn send_one_shot(data: &[u8], 
+                    path: impl Into<String>, 
+                    wait_for_response: ResponseOption) -> Result<usize, std::io::Error>
+{
+    let mut con = UnixStream::connect(format!("{}/{}", SOCKET_PATH, path.into()))?; 
+    con.write_all(data)?;
+    match wait_for_response
+    {
+        ResponseOption::WaitForResponse(mut buf) =>
+        {
+            Ok(con.read(&mut buf)?)
+        },
+        ResponseOption::DontWaitForResponse =>
+        {
+            Ok(0)
+        }
+    }
+}
+
+
+/// Server side communication handler, it is capable of listening for incoming connections and handling the data received.
+///
+/// It provides two methods to handle the incoming data, these two only differentiates in the way the data is handled. 
+/// [`listen`](Server::listen) has an internal loop, while 
+/// [`wait_connection`](Server::wait_connection) returns the stream.
+#[derive(Debug)]
+pub struct Server
+{
+    pub raw_path: String,
+    pub socket_name: String,
+    listener: UnixListener
+}
+
+impl Server
+{
+    pub fn new(socket_name: &str) -> Result<Self, std::io::Error>
+    {
+        let server_path = if socket_name.starts_with('/')
+        {
+            socket_name.to_string()
+        }
+        else
+        {
+            format!("{SOCKET_PATH}/{socket_name}")
+        };
+        info!("Creating server {:?}", server_path);
         
-        connection.set_read_timeout(read_timeout)?;
-        connection.set_write_timeout(write_timeout)?;
+        match remove_file(&server_path)
+        {
+            Ok(_) => { },
+            Err(_) => 
+            {
+                error!("Socket not found, creating a new one...");
+            }
+        }
         Ok(Self
         {
-            connection
+            raw_path: server_path.to_string(),
+            socket_name: socket_name.to_string(),
+            listener: UnixListener::bind(server_path)?
         })
     }
 
-    pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), std::io::Error>
-    {
-        self.connection.set_read_timeout(timeout)
-    }
-
-    pub fn set_write_timeout(&mut self, timeout: Option<Duration>) -> Result<(), std::io::Error>
-    {
-        self.connection.set_write_timeout(timeout)
-    }
-
-    /// Sends data to the server.
+    /// Waits for a connection and returns the stream and the data received.
     /// 
-    /// It maintains the connection open and can be used to send multiple messages in a short period
-    /// of time without the overhead of creating a new connection every time.
-    /// 
-    /// If the message doesn't need to be sent multiple times in a short period of time, it is recommended
-    /// to use the [`send_one_shot`](Client::send_one_shot) method instead.
-    pub fn send(&mut self, data: &[u8]) -> Result<(), std::io::Error>
-    {
-        self.connection.write_all(data)
-    }
-
-    /// Reads data from the server.
-    /// 
-    /// It reads data from the server, it is supposed to be used after the [`send`](Client::send) method.
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error>
-    {
-        self.connection.read(buf)
-    }
-
-    /// Sends data to the server and waits for a response if needed. 
-    /// 
-    /// It cant use the connection created when the client is instantiated, it is supposed to be used when
-    /// the message doesn't need to be sent multiple times in a short period of time.
-    /// 
-    /// If the message needs to be sent multiple times in a short period of time, it is recommended to use
-    /// the [`send`](Client::send) method instead.
+    /// Returns the stream and the data received after an incoming connection is established, 
+    /// allowing the user to handle the data.
     /// 
     /// # Example
     /// ```
     /// use std::{io, io::Write};
     /// 
-    /// use ipc::{Client, ResponseOption};
+    /// use ipc::{Server, StreamData};
     /// 
-    /// fn send_msg(sock: String, msg: String) -> Result<(), io::Error>
+    /// fn handle_data(data: &[u8], mut stream_data: StreamData)
     /// {
-    ///     Client::send_one_shot(msg.as_bytes(), sock, ResponseOption::DontWaitForResponse)?
+    ///     let msg = format!("Received {:?}", String::from_utf8_lossy(data));
+    ///     stream_data.stream.write_all(msg.as_bytes()).unwrap();
     /// }
-    /// ```
-    pub fn send_one_shot(data: &[u8], 
-                        path: impl Into<String>, 
-                        wait_for_response: ResponseOption) -> Result<usize, std::io::Error>
+    /// 
+    /// fn flow(mut server: Server) -> Result<(), io::Error>
+    /// {
+    ///     let mut buf = vec![0u8; 512];
+    ///     loop
+    ///     {
+    ///         let mut stream_data = server.wait_connection()?;
+    ///     
+    ///         let msg_len = stream_data.stream.read(&mut buf)?;
+    /// 
+    ///         handle_data(&buf[..msg_len], stream_data);
+    ///     }
+    /// }
+    pub fn wait_connection(&mut self) -> Result<Connection, std::io::Error>
     {
-        let mut con = UnixStream::connect(format!("{}/{}", SOCKET_PATH, path.into()))?; 
-        con.write_all(data)?;
-        match wait_for_response
-        {
-            ResponseOption::WaitForResponse(mut buf) =>
-            {
-                Ok(con.read(&mut buf)?)
-            },
-            ResponseOption::DontWaitForResponse =>
-            {
-                Ok(0)
-            }
-        }
+        let (stream, _) = self.listener.accept()?;
+        
+        Ok(Connection::new(stream))
     }
 }

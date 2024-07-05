@@ -1,18 +1,23 @@
-use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixListener;
 
-use super::RawListener as IPCServer;
+use crate::get_full_path;
 
-pub struct Connection
+pub struct AsyncConnection
 {
-    stream: UnixStream
+    stream: tokio::net::UnixStream
 }
 
-impl Connection
+impl AsyncConnection
 {
-    pub fn new(stream: UnixStream) -> Self
+    pub fn new(stream: tokio::net::UnixStream) -> Self
     {
         Self { stream }
+    }
+
+    pub async fn    read_raw(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error>
+    {
+        self.stream.read(buf).await
     }
 
     pub async fn read<T>(&mut self) -> Result<T, std::io::Error>
@@ -40,36 +45,44 @@ impl Connection
     }
 }
 
-pub struct AsyncListener
+pub struct AsyncServer
 {
-    ipc_server: IPCServer
+    listener: tokio::net::UnixListener,
+    raw_path: String
 }
 
-impl AsyncListener
+impl AsyncServer
 {
     pub fn new(sock_name: &str) -> Result<Self, std::io::Error>
     {
+        
         Ok(Self { 
-            ipc_server: IPCServer::new(sock_name)?
+            listener: UnixListener::bind(get_full_path(sock_name))?,
+            raw_path: sock_name.to_string()
         })
     }
 
     pub fn get_raw_path(&self) -> String
     {
-        self.ipc_server.raw_path.to_string()
+        self.raw_path.to_string()
     }
     /// Waits for a connection to be established
     /// 
     /// Returns a Connection object if a connection is established, otherwise None
     /// 
-    /// It will panic if the UnixStream cannot be created from the std::net::UnixStream or
-    /// if the UnixStream cannot be set to non-blocking
-    pub async fn wait_for_connection(&mut self) -> Option<Connection>
+    /// It will panic if the tokio::net::UnixStream cannot be created from the std::net::tokio::net::UnixStream or
+    /// if the tokio::net::UnixStream cannot be set to non-blocking
+    pub async fn wait_for_connection(&mut self) -> Option<AsyncConnection>
     {
-        self.ipc_server.wait_connection().ok().map(|data|
+        self.listener.accept().await.map(|data|
         {
-            data.stream.set_nonblocking(true).expect("Error setting UnixStream to non-blocking");
-            Connection::new(UnixStream::from_std(data.stream).expect("Error creating UnixStream from std::net::UnixStream"))
-        })
+            AsyncConnection::new(data.0)
+        }).ok()
     }
+}
+
+pub async fn new_client_async(sock_name: &str) -> Result<AsyncConnection, std::io::Error>
+{
+    let stream = tokio::net::UnixStream::connect(get_full_path(sock_name)).await?;
+    Ok(AsyncConnection::new(stream))
 }
