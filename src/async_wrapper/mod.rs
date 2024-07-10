@@ -1,6 +1,8 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
+use logs::info;
+
 use crate::get_full_path;
 
 pub struct AsyncConnection
@@ -15,7 +17,7 @@ impl AsyncConnection
         Self { stream }
     }
 
-    pub async fn    read_raw(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error>
+    pub async fn read_raw(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error>
     {
         self.stream.read(buf).await
     }
@@ -83,6 +85,9 @@ impl AsyncServer
 
 pub async fn new_client_async(sock_name: &str) -> Result<AsyncConnection, std::io::Error>
 {
-    let stream = tokio::net::UnixStream::connect(get_full_path(sock_name)).await?;
+    let full_path = get_full_path(sock_name);
+
+    info!("Connecting to socket: {}", full_path);
+    let stream = tokio::net::UnixStream::connect(full_path).await?;
     Ok(AsyncConnection::new(stream))
 }
