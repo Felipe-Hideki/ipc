@@ -123,6 +123,11 @@ impl Connection
         Ok(T::from(message.to_string()))
     }
     
+    pub fn send_raw(&mut self, response: Vec<u8>) -> Result<(), std::io::Error>
+    {
+        self.stream.write_all(&response.as_slice())
+    } 
+
     pub fn send(&mut self, response: impl Into<String>) -> Result<(), std::io::Error>
     {
         let response: String = response.into();
