@@ -17,7 +17,18 @@ impl AsyncConnection {
     }
 
     pub async fn read_raw(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        self.stream.read(buf).await
+        match self.stream.read(buf).await {
+            Ok(bytes_read) => {
+                if bytes_read == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "No data read",
+                    ));
+                }
+                Ok(bytes_read)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn read<T>(&mut self) -> Result<T, std::io::Error>
