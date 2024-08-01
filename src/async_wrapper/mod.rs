@@ -58,6 +58,10 @@ impl AsyncConnection {
         let response: String = response.into();
         self.stream.write_all(&Vec::from(response)).await
     }
+
+    pub async fn send_raw(&mut self, msg: &[u8]) -> Result<(), std::io::Error> {
+        self.stream.write_all(msg).await
+    }
 }
 
 pub struct AsyncServer {
