@@ -8,7 +8,7 @@ use logs::info;
 use crate::get_full_path;
 
 pub struct AsyncConnection {
-    stream: tokio::net::UnixStream,
+    pub stream: tokio::net::UnixStream,
 }
 
 impl AsyncConnection {
